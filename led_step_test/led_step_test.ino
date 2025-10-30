@@ -22,14 +22,19 @@ struct Dev {
 };
 
 // EXAMPLE: adjust to your actual setup
+// Pulling a pin LOW changes the address from 0x39
+// SEL_PIN_A selects the ODOMETER IC when pulled HIGH
+// SEL_PIN_B selects the BAT/ECO IC when pulled HIGH
+
 Dev DEVICES[] = {
   //{0x38, SEL_NONE},
   //{0x39, SEL_NONE},
   //{0x3A, SEL_NONE},
   //{0x3B, SEL_NONE},
   // If two ICs share 0x3A, uncomment these and remove the plain 0x3A above:
-  //{0x3A, SEL_A},   // first physical IC at 0x3A when pin 6 HIGH
-  { 0x3A, SEL_B },  // second physical IC at 0x3A when pin 7 HIGH
+  //{0x3A, SEL_A}, 
+  { 0x3A, SEL_A },
+  { 0x3A, SEL_B },
 };
 
 enum EcoMode : uint8_t { MODE_ECO,
@@ -44,6 +49,8 @@ struct BatEcoDigitStruct {
 
 BatEcoDigitStruct bat_eco_digit = {25, MODE_NORMAL, 8}; 
 const uint8_t BAT_ECO_DISP_ADDR = 0x3A;
+const uint8_t TRIP_CNT_ADDR = 0x39;
+const uint8_t ODOMETER_ADDR = 0x3A;
 
 
 const uint8_t NUM_DEV = sizeof(DEVICES) / sizeof(DEVICES[0]);
@@ -80,8 +87,8 @@ void clearAll(uint8_t addr) {
 
 void setSelector(SelMode m) {
   // Ensure only ONE is asserted at a time
-  digitalWrite(SEL_PIN_A, (m == SEL_A) ? LOW : HIGH);
-  digitalWrite(SEL_PIN_B, (m == SEL_B) ? LOW : HIGH);
+  digitalWrite(SEL_PIN_A, (m == SEL_A) ? HIGH : LOW);
+  digitalWrite(SEL_PIN_B, (m == SEL_B) ? HIGH : LOW);
   // Small settle time for the inverter/diode network to stabilize the ADR pin
   delayMicroseconds(100);
 }
@@ -230,8 +237,69 @@ void update_eco_bat_disp() {
 
 }
 
+void set_odo_meter(uint32_t odoval) {
+  /*
+  :param odoval: value from 0 to 99999
+  */
+
+  // Set 
+  // 4 digits, last digit is separate display
+  // seperate digit is the LSB
+  uint8_t tens = odoval % 10;
+  uint8_t hundreds = (odoval / 10) % 10;
+  uint8_t thousands = (odoval / 100) % 10;
+  uint8_t ten_thousands = (odoval / 1000) % 10;
+  uint8_t msb = (odoval / 10000) % 10;
+  //MSB
+
+  // LSB
+  bat_eco_digit.digit = tens;
+  
+
+
+
+
+
+  setSelector(SEL_A);
+  writeCtrl(ODOMETER_ADDR, CTRL_DYN_BOTH_ENABLE);
+  clearAll(ODOMETER_ADDR);
+  writeDigits(ODOMETER_ADDR, 
+    number_to_saa1064_digit(msb), 
+    number_to_saa1064_digit(ten_thousands), 
+    number_to_saa1064_digit(thousands), 
+    number_to_saa1064_digit(hundreds) // First digit left side 
+  );
+
+  setSelector(SEL_NONE);
+  update_eco_bat_disp();
+
+}
+
+void set_trip_counter(uint16_t tripval) {
+  /*
+  :param tripval: value from 0 to 9999
+  */
+
+  setSelector(SEL_NONE);
+  writeCtrl(TRIP_CNT_ADDR, CTRL_DYN_BOTH_ENABLE);
+  clearAll(TRIP_CNT_ADDR);
+
+  uint8_t d1 = number_to_saa1064_digit(tripval % 10); // Last digit
+  uint8_t d2 = number_to_saa1064_digit((tripval / 10) % 10);
+  uint8_t d3 = number_to_saa1064_digit((tripval / 100) % 10);
+  uint8_t d4 = number_to_saa1064_digit((tripval / 1000) % 10);
+
+  writeDigits(TRIP_CNT_ADDR, d4, d3, d2, d1);
+}
+
 void loop() {
 
+
+    //S - Speed
+    //E - ECO
+    //T - Trip
+    //B - Battery
+    //O - Odometer
 
     // Read serial and set battery level to value.
     if (Serial.available() > 0) {
@@ -241,6 +309,8 @@ void loop() {
         bat_eco_digit.bat_indicator = (uint8_t)val;
         update_eco_bat_disp();
       }
+      set_trip_counter(6789);
+      set_odo_meter(12345);
     }
 
 
