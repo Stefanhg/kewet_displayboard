@@ -57,6 +57,14 @@ void writeDigits(uint8_t addr, uint8_t d1, uint8_t d2, uint8_t d3, uint8_t d4) {
 
 void setSelector(SelMode m) {
   // Ensure only ONE is asserted at a time
+
+  // Ensure it only changes mode if different from current to avoid unnecessary toggles
+  static SelMode current_mode = SEL_NONE;
+  if (m == current_mode) {
+    return;
+  }
+  current_mode = m;
+
   // NOTE: Have confirmed LOW : HIGH logic is ok!
   digitalWrite(SEL_PIN_A, (m == SEL_A) ? LOW : HIGH);
   digitalWrite(SEL_PIN_B, (m == SEL_B) ? LOW : HIGH);
