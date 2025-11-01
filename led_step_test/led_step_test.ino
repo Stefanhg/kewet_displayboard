@@ -51,6 +51,8 @@ BatEcoDigitStruct bat_eco_digit = {25, MODE_NORMAL, 8};
 const uint8_t BAT_ECO_DISP_ADDR = 0x3A;
 const uint8_t TRIP_CNT_ADDR = 0x39;
 const uint8_t ODOMETER_ADDR = 0x3A;
+const uint8_t SPEEDOMETER_LOWER_ADDR = 0x38;
+const uint8_t SPEEDOMETER_UPPER_ADDR = 0x3B;
 
 
 const uint8_t NUM_DEV = sizeof(DEVICES) / sizeof(DEVICES[0]);
@@ -87,8 +89,9 @@ void clearAll(uint8_t addr) {
 
 void setSelector(SelMode m) {
   // Ensure only ONE is asserted at a time
-  digitalWrite(SEL_PIN_A, (m == SEL_A) ? HIGH : LOW);
-  digitalWrite(SEL_PIN_B, (m == SEL_B) ? HIGH : LOW);
+  // NOTE: Have confirmed LOW : HIGH logic is ok!
+  digitalWrite(SEL_PIN_A, (m == SEL_A) ? LOW : HIGH);
+  digitalWrite(SEL_PIN_B, (m == SEL_B) ? LOW : HIGH);
   // Small settle time for the inverter/diode network to stabilize the ADR pin
   delayMicroseconds(100);
 }
@@ -128,29 +131,6 @@ void runChase(uint8_t addr) {
   }
   // leave off
   clearAll(addr);
-}
-
-void setup() {
-  pinMode(SEL_PIN_A, OUTPUT);
-  pinMode(SEL_PIN_B, OUTPUT);
-  setSelector(SEL_NONE);
-
-  Wire.begin();
-  Serial.begin(9600);
-
-  // Start with everything blanked
-  for (int i = 0; i < NUM_DEV; ++i) {
-    setSelector(DEVICES[i].sel);
-    writeCtrl(DEVICES[i].addr, CTRL_DYN_BLANK);
-    clearAll(DEVICES[i].addr);
-  }
-  setSelector(SEL_NONE);
-
-  //  blankAllExcept(0);
-   writeDigits(DEVICES[0].addr, 0xFF, 0xFF, 0xFF, 0xFF);
-  // setSelector(SEL_B);
-  // writeCtrl(DEVICES[0].addr, CTRL_DYN_BLANK);
-  // writeDigits(DEVICES[0].addr, 12, 12, 12, 1<<5);
 }
 
 uint8_t number_to_saa1064_digit(uint8_t number) {
@@ -232,7 +212,7 @@ void update_eco_bat_disp() {
   Serial.println(setval);
   Serial.println(bat_eco_digit.bat_indicator);
   writeDigits(BAT_ECO_DISP_ADDR, numval, upper_val, lower_val, 1<<(int)bat_eco_digit.eco);
-
+  
   setSelector(SEL_NONE);
 
 }
@@ -255,9 +235,6 @@ void set_odo_meter(uint32_t odoval) {
   // LSB
   bat_eco_digit.digit = tens;
   
-
-
-
 
 
   setSelector(SEL_A);
@@ -292,6 +269,62 @@ void set_trip_counter(uint16_t tripval) {
   writeDigits(TRIP_CNT_ADDR, d4, d3, d2, d1);
 }
 
+void set_speed(uint8_t speedval) {
+  /*
+  Sets the speedometer LED display to the given speed value.
+  :param speedval: value from 0 to 100
+  */
+
+  // 0-100KM with 2km steps mapped to 51 LEDs
+  // Use a 64-bit literal for the shifts
+  uint64_t led_full_range_val = 1ULL << (speedval / 2);
+  uint8_t val0_16 = (uint8_t)(led_full_range_val & 0xFF);
+  uint8_t val16_32 = (uint8_t)((led_full_range_val >> 8) & 0xFF);
+  uint8_t val32_48 = (uint8_t)((led_full_range_val >> 16) & 0xFF);
+  uint8_t val48_64 = (uint8_t)((led_full_range_val >> 24) & 0xFF);
+
+  // Upper IC 64..100 km/h
+  uint8_t val64_80 = (uint8_t)((led_full_range_val >> 32) & 0xFF);
+  uint8_t val80_96 = (uint8_t)((led_full_range_val >> 40) & 0xFF);
+  uint8_t val96_100 = (uint8_t)((led_full_range_val >> 48) & 0x7);  // Only get the last 3 bits
+  
+  // Write to lower IC
+  // d1 of IC = 0-16, d2=32-48, d3=16-32, d4=48-64
+  setSelector(SEL_NONE);
+  writeCtrl(SPEEDOMETER_LOWER_ADDR, CTRL_DYN_BOTH_ENABLE);
+  clearAll(SPEEDOMETER_LOWER_ADDR);
+  writeDigits(SPEEDOMETER_LOWER_ADDR, val0_16, val32_48, val16_32, val48_64);
+
+  // Write to upper IC
+  // d1=64-80, d2=96-100, d3=80-96, d4=unused
+  // Selector already set to None
+  writeCtrl(SPEEDOMETER_UPPER_ADDR, CTRL_DYN_BOTH_ENABLE);
+  clearAll(SPEEDOMETER_UPPER_ADDR);
+  writeDigits(SPEEDOMETER_UPPER_ADDR, val64_80, val96_100, val80_96, 0);  
+}
+
+
+void setup() {
+  pinMode(SEL_PIN_A, OUTPUT);
+  pinMode(SEL_PIN_B, OUTPUT);
+  setSelector(SEL_NONE);
+
+  Wire.begin();
+  Serial.begin(9600);
+
+  // Start with everything blanked
+  for (int i = 0; i < NUM_DEV; ++i) {
+    setSelector(DEVICES[i].sel);
+    writeCtrl(DEVICES[i].addr, CTRL_DYN_BLANK);
+    clearAll(DEVICES[i].addr);
+  }
+  setSelector(SEL_NONE);
+
+  //  blankAllExcept(0);
+   writeDigits(DEVICES[0].addr, 0xFF, 0xFF, 0xFF, 0xFF);
+  set_speed(50);
+}
+
 void loop() {
 
 
@@ -304,56 +337,31 @@ void loop() {
     // Read serial and set battery level to value.
     if (Serial.available() > 0) {
       String input = Serial.readStringUntil('\n');
-      int val = input.toInt();
-      if (val >= 0 && val <= 100) {
-        bat_eco_digit.bat_indicator = (uint8_t)val;
-        update_eco_bat_disp();
+      String cmd = input.substring(0,1);
+      uint32_t val = input.substring(1).toInt();
+
+      if(cmd == "S") {
+        if (val >= 0 && val <= 100) {
+          set_speed((uint8_t)val);
+        }
+      } else if (cmd == "E") {
+        if (val >= 0 && val <= 2) {
+          bat_eco_digit.eco = (EcoMode)val;
+          update_eco_bat_disp();
+        }
+      } else if (cmd == "T") {
+        if (val >= 0 && val <= 9999) {
+          set_trip_counter((uint16_t)val);
+        }
+      } else if (cmd == "B") {
+        if (val >= 0 && val <= 100) {
+          bat_eco_digit.bat_indicator = (uint8_t)val;
+          update_eco_bat_disp();
+        }
+      } else if (cmd == "O") {
+        if (val >= 0 && val <= 99999) {
+          set_odo_meter((uint32_t)val);
+        }
       }
-      set_trip_counter(6789);
-      set_odo_meter(12345);
     }
-
-
-  // for (int i = 0; i < NUM_DEV; ++i) {
-  //   // Give this device sole ownership
-  //   blankAllExcept(i);
-  //   initActive(i);
-
-
-  //   // DISP2, DISP3 controls battery indicator
-  //   // DISP2 controls UPPER part, DISP3 lower
-  //   // DISP4 bit 0,1,2 controls ECO
-  //   for(int b=0; b<=100; b+=1) {
-  //     bat_eco_digit.bat_indicator = b; // Set battery level
-  //     //for(int e=MODE_ECO; e<=MODE_BOOST; e++) {
-  //       //bat_eco_digit.eco = (EcoMode)e;
-  //       //for(int d=0; d<=9; d++) {
-  //         //bat_eco_digit.digit = d;
-  //     update_eco_bat_disp();
-  //     delay(200);
-  //      // }
-  //     //}
-  //   }
-  //   //bat_eco_digit.bat_indicator = 80; // Set battery level to 25%
-  //   //update_eco_bat_disp();
-  //   // DISP4 bit 0,1,2 controls ECO
-
-  //   // IDENT banner: briefly turn all on so you can see which block is under test
-  //   //writeDigits(DEVICES[i].addr, 0xFF, 0xFF, 0xFF, 0xFF);
-  //   // delay(150);
-  //   // clearAll(DEVICES[i].addr);
-  //   // delay(80);
-
-  //   // Run the 32-LED chase for this device
-  //   // runChase(DEVICES[i].addr);
-
-  //   // Release selector after test
-  //   setSelector(SEL_NONE);
-
-  //   // Small gap between devices
-  //   // delay(200);
-  // }
-
-  // Optional pause before repeating the full suite
-  //delay(50000);
 }
