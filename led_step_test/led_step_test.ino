@@ -96,43 +96,6 @@ void setSelector(SelMode m) {
   delayMicroseconds(100);
 }
 
-/* --------- TEST LOGIC ---------- */
-
-void blankAllExcept(int keepIdx) {
-  for (int i = 0; i < NUM_DEV; ++i) {
-    if (i == keepIdx) continue;
-    setSelector(DEVICES[i].sel);
-    writeCtrl(DEVICES[i].addr, CTRL_DYN_BLANK);
-    clearAll(DEVICES[i].addr);
-  }
-  // After blanking others, release their selectors
-  setSelector(SEL_NONE);
-}
-
-void initActive(int idx) {
-  setSelector(DEVICES[idx].sel);
-  writeCtrl(DEVICES[idx].addr, CTRL_DYN_BOTH_ENABLE);
-  clearAll(DEVICES[idx].addr);
-}
-
-// Chase 32 outputs: bit 0..7 on D1, then D2, then D3, then D4
-void runChase(uint8_t addr) {
-  uint8_t d[4] = { 0, 0, 0, 0 };
-  // One pass lights each sink once
-  for (int reg = 0; reg < 4; ++reg) {
-    for (int bit = 0; bit < 8; ++bit) {
-      // turn previous off
-      d[0] = d[1] = d[2] = d[3] = 0;
-      // set current one
-      d[reg] = (uint8_t)(1u << bit);
-      writeDigits(addr, d[0], d[1], d[2], d[3]);
-      delay(STEP_MS);
-    }
-  }
-  // leave off
-  clearAll(addr);
-}
-
 uint8_t number_to_saa1064_digit(uint8_t number) {
   /*
   Converts 0-9 to corrosponding digit directly written to the IC and returns the covnerted value
@@ -166,10 +129,6 @@ uint8_t number_to_saa1064_digit(uint8_t number) {
 
 void update_eco_bat_disp() {
   
-  setSelector(SEL_B);
-  writeCtrl(BAT_ECO_DISP_ADDR, CTRL_DYN_BOTH_ENABLE);
-  clearAll(BAT_ECO_DISP_ADDR);
-
 
   // 16 levels of battery
   // at 100%, ALL on
@@ -209,12 +168,8 @@ void update_eco_bat_disp() {
   }
   
   
-  Serial.println(setval);
-  Serial.println(bat_eco_digit.bat_indicator);
+  setSelector(SEL_B);
   writeDigits(BAT_ECO_DISP_ADDR, numval, upper_val, lower_val, 1<<(int)bat_eco_digit.eco);
-  
-  setSelector(SEL_NONE);
-
 }
 
 void set_odo_meter(uint32_t odoval) {
@@ -238,16 +193,12 @@ void set_odo_meter(uint32_t odoval) {
 
 
   setSelector(SEL_A);
-  writeCtrl(ODOMETER_ADDR, CTRL_DYN_BOTH_ENABLE);
-  clearAll(ODOMETER_ADDR);
   writeDigits(ODOMETER_ADDR, 
     number_to_saa1064_digit(msb), 
     number_to_saa1064_digit(ten_thousands), 
     number_to_saa1064_digit(thousands), 
     number_to_saa1064_digit(hundreds) // First digit left side 
   );
-
-  setSelector(SEL_NONE);
   update_eco_bat_disp();
 
 }
@@ -256,16 +207,12 @@ void set_trip_counter(uint16_t tripval) {
   /*
   :param tripval: value from 0 to 9999
   */
-
-  setSelector(SEL_NONE);
-  writeCtrl(TRIP_CNT_ADDR, CTRL_DYN_BOTH_ENABLE);
-  clearAll(TRIP_CNT_ADDR);
-
   uint8_t d1 = number_to_saa1064_digit(tripval % 10); // Last digit
   uint8_t d2 = number_to_saa1064_digit((tripval / 10) % 10);
   uint8_t d3 = number_to_saa1064_digit((tripval / 100) % 10);
   uint8_t d4 = number_to_saa1064_digit((tripval / 1000) % 10);
 
+  setSelector(SEL_NONE);
   writeDigits(TRIP_CNT_ADDR, d4, d3, d2, d1);
 }
 
@@ -291,15 +238,11 @@ void set_speed(uint8_t speedval) {
   // Write to lower IC
   // d1 of IC = 0-16, d2=32-48, d3=16-32, d4=48-64
   setSelector(SEL_NONE);
-  writeCtrl(SPEEDOMETER_LOWER_ADDR, CTRL_DYN_BOTH_ENABLE);
-  clearAll(SPEEDOMETER_LOWER_ADDR);
   writeDigits(SPEEDOMETER_LOWER_ADDR, val0_16, val32_48, val16_32, val48_64);
 
   // Write to upper IC
   // d1=64-80, d2=96-100, d3=80-96, d4=unused
   // Selector already set to None
-  writeCtrl(SPEEDOMETER_UPPER_ADDR, CTRL_DYN_BOTH_ENABLE);
-  clearAll(SPEEDOMETER_UPPER_ADDR);
   writeDigits(SPEEDOMETER_UPPER_ADDR, val64_80, val96_100, val80_96, 0);  
 }
 
@@ -312,17 +255,20 @@ void setup() {
   Wire.begin();
   Serial.begin(9600);
 
-  // Start with everything blanked
-  for (int i = 0; i < NUM_DEV; ++i) {
-    setSelector(DEVICES[i].sel);
-    writeCtrl(DEVICES[i].addr, CTRL_DYN_BLANK);
-    clearAll(DEVICES[i].addr);
-  }
-  setSelector(SEL_NONE);
+  // Initialize all devices
+  writeCtrl(BAT_ECO_DISP_ADDR, CTRL_DYN_BOTH_ENABLE);
+  writeCtrl(TRIP_CNT_ADDR, CTRL_DYN_BOTH_ENABLE);
+  writeCtrl(ODOMETER_ADDR, CTRL_DYN_BOTH_ENABLE);
+  writeCtrl(SPEEDOMETER_LOWER_ADDR, CTRL_DYN_BOTH_ENABLE);
+  writeCtrl(SPEEDOMETER_UPPER_ADDR, CTRL_DYN_BOTH_ENABLE);
 
-  //  blankAllExcept(0);
-   writeDigits(DEVICES[0].addr, 0xFF, 0xFF, 0xFF, 0xFF);
+  // Set initial values
   set_speed(50);
+  set_odo_meter(12345);
+  set_trip_counter(6789);
+  bat_eco_digit.bat_indicator = 75;
+  bat_eco_digit.eco = MODE_NORMAL;
+  update_eco_bat_disp();
 }
 
 void loop() {
