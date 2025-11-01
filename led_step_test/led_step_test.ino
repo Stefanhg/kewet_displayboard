@@ -6,36 +6,11 @@
 const uint8_t SEL_PIN_A = 6;  // set HIGH when using the first of the twins
 const uint8_t SEL_PIN_B = 7;  // set HIGH when using the second of the twins
 
-// How fast to step the LED chase (milliseconds)
-const uint16_t STEP_MS = 30;
-
-// List every "logical device" you want to test, in the order to test them.
-// - For normal chips: use SEL_NONE
-// - For twins (same I2C address): add two entries with SEL_A and SEL_B
+// Selector for the ICs. When selecting SEL_PIN_A, use SEL_A. When using SEL_NONE, sets both HIGH.
 enum SelMode : uint8_t { SEL_NONE,
                          SEL_A,
                          SEL_B };
 
-struct Dev {
-  uint8_t addr;  // 7-bit I2C address (0x38..0x3B)
-  SelMode sel;   // which selector to assert
-};
-
-// EXAMPLE: adjust to your actual setup
-// Pulling a pin LOW changes the address from 0x39
-// SEL_PIN_A selects the ODOMETER IC when pulled HIGH
-// SEL_PIN_B selects the BAT/ECO IC when pulled HIGH
-
-Dev DEVICES[] = {
-  //{0x38, SEL_NONE},
-  //{0x39, SEL_NONE},
-  //{0x3A, SEL_NONE},
-  //{0x3B, SEL_NONE},
-  // If two ICs share 0x3A, uncomment these and remove the plain 0x3A above:
-  //{0x3A, SEL_A}, 
-  { 0x3A, SEL_A },
-  { 0x3A, SEL_B },
-};
 
 enum EcoMode : uint8_t { MODE_ECO,
                          MODE_NORMAL,
@@ -54,8 +29,6 @@ const uint8_t ODOMETER_ADDR = 0x3A;
 const uint8_t SPEEDOMETER_LOWER_ADDR = 0x38;
 const uint8_t SPEEDOMETER_UPPER_ADDR = 0x3B;
 
-
-const uint8_t NUM_DEV = sizeof(DEVICES) / sizeof(DEVICES[0]);
 
 /* --------- SAA1064 HELPERS ---------- */
 
@@ -78,11 +51,6 @@ void writeDigits(uint8_t addr, uint8_t d1, uint8_t d2, uint8_t d3, uint8_t d4) {
   Wire.write(d3);
   Wire.write(d4);
   Wire.endTransmission();
-}
-
-// Convenience: clear all 4 digit bytes
-void clearAll(uint8_t addr) {
-  writeDigits(addr, 0x00, 0x00, 0x00, 0x00);
 }
 
 /* --------- SELECT LINE CONTROL ---------- */
@@ -128,7 +96,9 @@ uint8_t number_to_saa1064_digit(uint8_t number) {
 } 
 
 void update_eco_bat_disp() {
-  
+  /*
+  Updates the battery/eco display based on the current bat_eco_digit struct values
+  */
 
   // 16 levels of battery
   // at 100%, ALL on
@@ -166,7 +136,6 @@ void update_eco_bat_disp() {
       upper_val |= (1 << i) - 1;
     }
   }
-  
   
   setSelector(SEL_B);
   writeDigits(BAT_ECO_DISP_ADDR, numval, upper_val, lower_val, 1<<(int)bat_eco_digit.eco);
