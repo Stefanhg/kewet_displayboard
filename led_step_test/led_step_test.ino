@@ -114,31 +114,35 @@ void update_eco_bat_disp() {
   Updates the battery/eco display based on the current bat_eco_digit struct values
   */
 
-// 16 levels of battery
-// at 100%, ALL on
-// AT 0%, first LED is on
-#define PERC_TO_LEVEL 6.25  // 100/16
+  // 16 levels of battery
+  // at 100%, ALL on
+  // AT 0%, first LED is on
+  #define STEP_PER_LED 6.25  // % BAT / 16 LEDs
 
   // DISP1 controls last digit
   // DISP2, DISP3 controls battery indicator
   // DISP2 controls UPPER part, DISP3 lower
   // DISP4 bit 0,1,2 controls ECO
   uint8_t numval = number_to_saa1064_digit(bat_eco_digit.digit);
-  uint16_t setval = 1 << (int)(bat_eco_digit.bat_indicator / PERC_TO_LEVEL);
+  uint16_t led_full_range_val = 1 << (int)(bat_eco_digit.bat_indicator / STEP_PER_LED);
+  if (bat_eco_digit.bat_indicator >= 100) {
+    led_full_range_val = 0xFFFF;  // All on
+  }
 
   // Battery fill enabled
   if (speedo_battery_fill_setting & 0x02) {
     // Turn on all LEDs below the current level
     for (int i = 0; i < 16; ++i) {
-      if (setval & (1 << i)) {
-        setval |= (1 << i) - 1;
+      if (led_full_range_val & (1 << i)) {
+        led_full_range_val |= (1 << i) - 1;
       }
     }
   }
 
   // Split setval into upper and lower parts
-  uint8_t upper_val = (uint8_t)(setval >> 8);
-  uint8_t lower_val = (uint8_t)setval;
+  uint8_t lower_val = (uint8_t)(led_full_range_val) & 0xFF;
+  uint8_t upper_val = (uint8_t)(led_full_range_val >> 8) & 0xFF;
+  
 
   setSelector(SEL_B);
   writeDigits(BAT_ECO_DISP_ADDR, numval, upper_val, lower_val, 1 << (int)bat_eco_digit.eco);
