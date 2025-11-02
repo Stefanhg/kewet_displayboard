@@ -28,6 +28,7 @@ const uint8_t TRIP_CNT_ADDR = 0x39;
 const uint8_t ODOMETER_ADDR = 0x3A;
 const uint8_t SPEEDOMETER_LOWER_ADDR = 0x38;
 const uint8_t SPEEDOMETER_UPPER_ADDR = 0x3B;
+const uint8_t EEPROM_ADDR = 0x51;  // 24U02
 
 
 /* --------- SAA1064 HELPERS ---------- */
@@ -103,6 +104,11 @@ uint8_t number_to_saa1064_digit(uint8_t number) {
   }
 }
 
+// Setting for Speed and battery display.
+// Enables/disables turning on LEDS below current level
+// Supports setting both battery and speedoemter idependently
+uint8_t speedo_battery_fill_setting = 3;  // 0=off, 1=speedo only, 2=battery only, 3=both
+
 void update_eco_bat_disp() {
 /*
   Updates the battery/eco display based on the current bat_eco_digit struct values
@@ -120,30 +126,19 @@ void update_eco_bat_disp() {
   uint8_t numval = number_to_saa1064_digit(bat_eco_digit.digit);
   uint16_t setval = 1 << (int)(bat_eco_digit.bat_indicator / PERC_TO_LEVEL);
 
+  // Battery fill enabled
+  if (speedo_battery_fill_setting & 0x02) {
+    // Turn on all LEDs below the current level
+    for (int i = 0; i < 16; ++i) {
+      if (setval & (1 << i)) {
+        setval |= (1 << i) - 1;
+      }
+    }
+  }
 
   // Split setval into upper and lower parts
-  uint8_t upper_val = 0;
-  uint8_t lower_val = 0;
-
-  if (setval > 0xFF) {
-    upper_val = (uint8_t)(setval >> 8);
-    lower_val = 0xFF;
-  } else {
-    upper_val = 0;
-    lower_val = (uint8_t)setval;
-  }
-
-  // Turn on all LEDs below the current level
-  for (int i = 0; i < 8; ++i) {
-    if (lower_val & (1 << i)) {
-      lower_val |= (1 << i) - 1;
-    }
-  }
-  for (int i = 0; i < 8; ++i) {
-    if (upper_val & (1 << i)) {
-      upper_val |= (1 << i) - 1;
-    }
-  }
+  uint8_t upper_val = (uint8_t)(setval >> 8);
+  uint8_t lower_val = (uint8_t)setval;
 
   setSelector(SEL_B);
   writeDigits(BAT_ECO_DISP_ADDR, numval, upper_val, lower_val, 1 << (int)bat_eco_digit.eco);
@@ -166,8 +161,6 @@ void set_odo_meter(uint32_t odoval) {
 
   // LSB
   bat_eco_digit.digit = tens;
-
-
 
   setSelector(SEL_A);
   writeDigits(ODOMETER_ADDR,
@@ -201,6 +194,18 @@ void set_speed(uint8_t speedval) {
   // 0-100KM with 2km steps mapped to 51 LEDs
   // Use a 64-bit literal for the shifts
   uint64_t led_full_range_val = 1ULL << (speedval / 2);
+
+
+  // Turn on
+  // If enabled, turn on all LEDs below current level
+  if (speedo_battery_fill_setting & 0x01) {
+    for (int i = 0; i < 51; ++i) {
+      if (led_full_range_val & (1ULL << i)) {
+        led_full_range_val |= (1ULL << i) - 1;
+      }
+    }
+  }
+
   uint8_t val0_16 = (uint8_t)(led_full_range_val & 0xFF);
   uint8_t val16_32 = (uint8_t)((led_full_range_val >> 8) & 0xFF);
   uint8_t val32_48 = (uint8_t)((led_full_range_val >> 16) & 0xFF);
@@ -247,7 +252,127 @@ void setup() {
   update_eco_bat_disp();
 }
 
-void loop() {
+void write_to_eeprom(uint8_t mem_addr, uint8_t data) {
+  /*
+  Writes a byte to the EEPROM at the specified memory address.
+  :param mem_addr: Memory address in EEPROM
+  :param data: Data byte to write
+  */
+  Wire.beginTransmission(EEPROM_ADDR);
+  Wire.write(mem_addr);
+  Wire.write(data);
+  Wire.endTransmission();
+  delay(5);  // EEPROM write delay
+}
+
+void read_from_eeprom(uint8_t mem_addr, uint8_t &data) {
+  /*
+  Reads a byte from the EEPROM at the specified memory address.
+  :param mem_addr: Memory address in EEPROM
+  :param data: Reference to store the read data byte
+  */
+  Wire.beginTransmission(EEPROM_ADDR);
+  Wire.write(mem_addr);
+  Wire.endTransmission();
+
+  Wire.requestFrom(EEPROM_ADDR, (uint8_t)1);
+  if (Wire.available()) {
+    data = Wire.read();
+  }
+}
+
+uint8_t read_byte_from_eeprom(uint8_t mem_addr) {
+  /*
+  Reads a byte from the EEPROM at the specified memory address.
+  :param mem_addr: Memory address in EEPROM
+  :return: Data byte read
+  */
+  uint8_t data = 0;
+  read_from_eeprom(mem_addr, data);
+  return data;
+}
+
+uint8_t configureSettings(uint8_t setting, uint8_t value) {
+  /*
+  Configures different settings based on the setting ID and value.
+  :param setting: Setting ID
+  :param value: Value to set
+  :returns: 0 on success, 1 on failure
+  */
+
+  switch (setting) {
+    case 0:
+      // Prints value of the given setting
+      // This will cause two serial prints, one from here and one from caller
+      switch (value) {
+        case 2:
+          Serial.println(speedo_battery_fill_setting);
+          return 0;
+        default:
+          return 2;  // Unknown sub-setting
+      }
+      break;
+    case 1:
+      // Set odometer in EEPROM
+      break;
+    case 2:
+      // Enable/disable speedo/battery fill
+      if (value <= 3) {
+        speedo_battery_fill_setting = value;
+        return 0;
+      }
+      break;
+    default:
+      // Unknown setting
+      break;
+  }
+  return 1;
+}
+
+void setAllLedsOn() {
+  /*
+  Test function to set all LEDs on all displays.
+  */
+
+  // Speedometer
+  setSelector(SEL_NONE);
+  writeDigits(SPEEDOMETER_LOWER_ADDR, 0xFF, 0xFF, 0xFF, 0xFF);
+  writeDigits(SPEEDOMETER_UPPER_ADDR, 0xFF, 0x07, 0xFF, 0x00);
+
+  // Odometer
+  setSelector(SEL_A);
+  writeDigits(ODOMETER_ADDR, 0xFF, 0xFF, 0xFF, 0xFF);
+
+  // Trip Counter
+  setSelector(SEL_NONE);
+  writeDigits(TRIP_CNT_ADDR, 0xFF, 0xFF, 0xFF, 0xFF);
+
+  // Battery/Eco Display
+  setSelector(SEL_B);
+  writeDigits(BAT_ECO_DISP_ADDR, 0xFF, 0xFF, 0xFF, 0x07);
+}
+
+void clearAllDisplays() {
+  /*
+  Clears all displays by writing 0s to all digits.
+  */
+
+  // Speedometer
+  setSelector(SEL_NONE);
+  writeDigits(SPEEDOMETER_LOWER_ADDR, 0x00, 0x00, 0x00, 0x00);
+  writeDigits(SPEEDOMETER_UPPER_ADDR, 0x00, 0x00, 0x00, 0x00);
+  // Odometer
+  setSelector(SEL_A);
+  writeDigits(ODOMETER_ADDR, 0x00, 0x00, 0x00, 0x00);
+  // Trip Counter
+  setSelector(SEL_NONE);
+  writeDigits(TRIP_CNT_ADDR, 0x00, 0x00, 0x00, 0x00);
+  // Battery/Eco Display
+  setSelector(SEL_B);
+  writeDigits(BAT_ECO_DISP_ADDR, 0x00, 0x00, 0x00, 0x00);
+}
+
+void serialHandler() {
 
 
   //S - Speed
@@ -284,6 +409,37 @@ void loop() {
       if (val >= 0 && val <= 99999) {
         set_odo_meter((uint32_t)val);
       }
+    } else if (cmd == "C") {
+      // C, Configuration command.
+      // Allows you to configure different settings.
+      // Command is comma seperated so C(setting),(value)
+      // Setting is a int, value is an int
+      int first_comma = input.indexOf(',', 1);
+      if (first_comma != -1) {
+        String setting = input.substring(1, first_comma);
+        String value_str = input.substring(first_comma + 1);
+        uint8_t value = value_str.toInt();
+        uint8_t cfm = configureSettings(setting.toInt(), value);
+        if (cfm > 0) {
+          Serial.println(50 + cfm);
+          return;
+        }
+      }
+    } else if (cmd == "x") {
+      // Test command, Sets all LEDs on all displays.
+      setAllLedsOn();    
+    } else if (cmd == "X") {
+      // Clear all displays
+      clearAllDisplays();
+    } else {
+      Serial.println(1);  // Error
+      return;
     }
+    Serial.println(0);  // OK
+    return;
   }
+}
+
+void loop() {
+  serialHandler();
 }
