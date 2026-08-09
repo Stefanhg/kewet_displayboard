@@ -1,0 +1,11 @@
+[project]
+name = "python"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.2.6",
+    "opencv-python>=4.11.0.86",
+    "pip>=25.3",
+    "pyserial>=3.5",
+    "pytest>=8.4.2",
+]
